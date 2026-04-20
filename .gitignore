@@ -13,3 +13,5 @@ env/
 *.json
 !requirements.txt
 !vercel.json
+
+.vercel
