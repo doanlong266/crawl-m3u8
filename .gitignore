@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.log
+
+# Local crawl outputs
+*.m3u
+*.txt
+*.json
+!requirements.txt
+!vercel.json
