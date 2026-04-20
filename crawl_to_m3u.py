@@ -51,8 +51,13 @@ M3U8_RE = re.compile(r'https?://[^\s"\'<>]+?\.m3u8(?:\?[^\s"\'<>]+)?', re.IGNORE
 # Bắt giờ kiểu 09:30, 11:00
 TIME_RE = re.compile(r"\b(\d{1,2}:\d{2})\b")
 
-# Link trận thường có dạng /team-a-vs-team-b-1234567
-MATCH_PATH_RE = re.compile(r"^/[^/?#]+-vs-[^/?#]+-\d+/?$", re.IGNORECASE)
+# Link trận thường có dạng:
+# - /team-a-vs-team-b-1234567
+# - /truc-tiep/team-a-vs-team-b-1900-20-04-2026/1234567
+MATCH_PATH_RE = re.compile(
+    r"^/(?:[^/?#]+-vs-[^/?#]+-\d+|truc-tiep/[^/?#]+-vs-[^/?#]+(?:-\d{3,4}-\d{2}-\d{2}-\d{4})?/\d+)/?$",
+    re.IGNORECASE,
+)
 
 def pick_text(el) -> str:
     return el.get_text(" ", strip=True) if el else ""
@@ -197,6 +202,13 @@ def looks_like_domain(value: str) -> bool:
     text = clean_text(value).lower()
     return bool(re.fullmatch(r"(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+", text))
 
+def clean_team_name(value: str) -> str:
+    text = clean_text(value).strip(" -–|")
+    text = re.sub(r"\s+\d{1,2}:\d{2}\s+(?:ngày\s+)?\d{1,2}/\d{1,2}.*$", "", text, flags=re.I)
+    text = re.sub(r"\s+\d{3,4}\s*-\s*\d{1,2}\s*-\s*\d{1,2}\s*-\s*\d{4}.*$", "", text, flags=re.I)
+    text = re.sub(r"\s*-\s*(Trực tiếp|Live).*?$", "", text, flags=re.I)
+    return clean_text(text).strip(" -–|")
+
 def split_teams_from_title(title: str) -> tuple[str, str]:
     """
     Cố gắng tách team A / team B từ title kiểu:
@@ -221,8 +233,8 @@ def split_teams_from_title(title: str) -> tuple[str, str]:
     for sep in seps:
         parts = re.split(sep, t, maxsplit=1, flags=re.I)
         if len(parts) == 2:
-            a = parts[0].strip(" -–|")
-            b = parts[1].strip(" -–|")
+            a = clean_team_name(parts[0])
+            b = clean_team_name(parts[1])
             # chặn trường hợp tách bậy quá ngắn
             if len(a) >= 2 and len(b) >= 2:
                 return a, b
