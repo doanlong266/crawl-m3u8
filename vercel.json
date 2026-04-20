@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/*.py": {
-      "maxDuration": 300,
-      "excludeFiles": "{__pycache__/**,*.txt,*.json,*.png}"
+  "rewrites": [
+    {
+      "source": "/api/crawl",
+      "destination": "/api"
     }
-  }
+  ]
 }
