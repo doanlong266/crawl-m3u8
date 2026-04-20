@@ -15,6 +15,7 @@ START_URL = "https://hoadaotv.info/"
 OUT_M3U = ""
 OUT_JSON = ""
 GROUP_NAME = "BenjaminDoan"
+M3U_USER_AGENT = "Mozilla/5.0+(Windows+NT+11.0;+Win64;+x64)+AppleWebKit/537.36+(KHTML,+like+Gecko)+Chrome/113.0.0.0+Safari/537.36+Edg/113.0.1774.42"
 
 TIMEOUT = 12
 MAX_MATCHES = 80  # đủ dùng, mày tăng/giảm tùy
@@ -146,6 +147,12 @@ def extract_title_like(soup: BeautifulSoup) -> str:
 
 def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+def site_root_url(value: str) -> str:
+    parsed = urlparse(value or "")
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/"
 
 def content_attr(el) -> str:
     return clean_text(el.get("content", "")) if el else ""
@@ -304,7 +311,7 @@ def unique_stream_urls(html: str) -> list[str]:
             out.append(clean_url)
     return out
 
-def build_stream_links(stream_urls: list[str], channel_id: str, match_url: str) -> list[dict]:
+def build_stream_links(stream_urls: list[str], channel_id: str, match_url: str, source_url: str = "") -> list[dict]:
     links = []
     for idx, url in enumerate(stream_urls, 1):
         links.append({
@@ -313,7 +320,7 @@ def build_stream_links(stream_urls: list[str], channel_id: str, match_url: str) 
             "type": "hls",
             "default": idx == 1,
             "url": url,
-            "request_headers": guess_request_headers(url, match_url)
+            "request_headers": guess_request_headers(url, match_url, source_url)
         })
     return links
 
@@ -324,13 +331,14 @@ def build_channel(
     group: str,
     source_name: str,
     default_image_url: str = DEFAULT_IMAGE_URL,
+    source_url: str = "",
 ) -> dict:
     ch_id = stable_id("benjamin", match_url, 12)
     source_id = stable_id("src", ch_id, 10)
     content_id = stable_id("ct", ch_id, 10)
     stream_id = stable_id("st", ch_id, 10)
     display_name = build_channel_name(info)
-    stream_links = build_stream_links(stream_urls, ch_id, match_url)
+    stream_links = build_stream_links(stream_urls, ch_id, match_url, source_url)
 
     return {
         "id": ch_id,
@@ -614,12 +622,17 @@ def build_labels(info: dict, group: str) -> list[dict]:
         )
     return labels
 
-def guess_request_headers(m3u8_url: str, match_url: str) -> list[dict]:
+def guess_request_headers(m3u8_url: str, match_url: str, source_url: str = "") -> list[dict]:
     """
     Một số CDN cần Referer. Nếu mày biết chắc referer nào thì set cứng ở đây.
     Default: dùng chính match_url làm Referer (an toàn hơn để chống 403).
     """
-    return [{"key": "Referer", "value": match_url}]
+    root = site_root_url(source_url) or site_root_url(match_url)
+    return [
+        {"key": "User-Agent", "value": M3U_USER_AGENT},
+        {"key": "Referer", "value": root or match_url},
+        {"key": "Origin", "value": root},
+    ]
 
 def create_session() -> requests.Session:
     s = requests.Session()
@@ -629,10 +642,28 @@ def create_session() -> requests.Session:
     })
     return s
 
+def m3u_attr(value: str) -> str:
+    return str(value or "").replace('"', "'")
+
+def vlc_option_name(header_key: str) -> str:
+    return {
+        "User-Agent": "http-user-agent",
+        "Referer": "http-referrer",
+        "Origin": "http-origin",
+    }.get(header_key, f"http-{header_key.lower()}")
+
 def build_m3u_text(m3u_items: list[dict]) -> str:
     m3u_lines = ["#EXTM3U"]
     for it in m3u_items:
-        m3u_lines.append(f'#EXTINF:-1 group-title="{it["group"]}",{it["name"]}')
+        attrs = [f'group-title="{m3u_attr(it["group"])}"']
+        if it.get("logo"):
+            attrs.append(f'tvg-logo="{m3u_attr(it["logo"])}"')
+        m3u_lines.append(f'#EXTINF:-1 {" ".join(attrs)}, {it["name"]}')
+        for header in it.get("headers", []):
+            key = header.get("key", "")
+            value = header.get("value", "")
+            if key and value:
+                m3u_lines.append(f"#EXTVLCOPT:{vlc_option_name(key)}={value}")
         m3u_lines.append(it["url"])
     return "\n".join(m3u_lines) + "\n"
 
@@ -707,8 +738,9 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
         m3u8s = unique_stream_urls(html)
         stream_urls = m3u8s if info["status"] == "live" else []
         status = info["status"] if info["status"] in group_channels else "upcoming"
+        source_group = source_name or GROUP_NAME
         group_channels[status].append(
-            build_channel(info, match_url, stream_urls, GROUP_NAME, source_name, source_image)
+            build_channel(info, match_url, stream_urls, source_group, source_name, source_image, source_url)
         )
 
         added_count = 0
@@ -722,7 +754,9 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
                 m3u_items.append({
                     "name": (f'[{info["time"]}] {display_name}'.strip() if info.get("time") else display_name),
                     "url": u,
-                    "group": GROUP_NAME
+                    "group": source_group,
+                    "logo": source_image or info.get("team_a_image") or info.get("team_b_image"),
+                    "headers": guess_request_headers(u, match_url, source_url),
                 })
                 added_count += 1
 

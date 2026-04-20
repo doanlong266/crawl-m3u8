@@ -2,7 +2,7 @@ import json
 import sys
 from pathlib import Path
 
-from flask import Flask, Response, request
+from flask import Flask, Response, request, send_from_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -54,7 +54,6 @@ def cors_headers() -> dict:
     }
 
 
-@app.route("/", methods=["GET", "OPTIONS"])
 @app.route("/api", methods=["GET", "OPTIONS"])
 @app.route("/api/crawl", methods=["GET", "OPTIONS"])
 def crawl_route():
@@ -85,3 +84,13 @@ def crawl_route():
         return json_response(result["stats"])
 
     return json_response(result["json"])
+
+
+@app.route("/", methods=["GET"])
+def client_route():
+    return send_from_directory(str(ROOT), "index.html")
+
+
+@app.route("/assets/<path:filename>", methods=["GET"])
+def assets_route(filename: str):
+    return send_from_directory(str(ROOT / "assets"), filename)
