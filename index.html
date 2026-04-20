@@ -54,11 +54,10 @@
           <button id="exportButton" class="button button-primary" type="submit">
             <span id="buttonSpinner" class="spinner hidden" aria-hidden="true"></span>
             <svg id="buttonIcon" class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3v12"></path>
-              <path d="M7 10l5 5 5-5"></path>
-              <path d="M5 21h14"></path>
+              <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"></path>
+              <path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"></path>
             </svg>
-            <span>Xuất file</span>
+            <span>Lấy link</span>
           </button>
 
           <button id="clearButton" class="button button-icon-only" type="button" title="Xóa kết quả" aria-label="Xóa kết quả">
@@ -85,6 +84,13 @@
             <dt>Thời gian</dt>
             <dd id="createdAt">-</dd>
           </div>
+          <div class="meta-row">
+            <dt>Link</dt>
+            <dd>
+              <a id="storageLink" class="meta-link hidden" href="#" target="_blank" rel="noopener">Mở link</a>
+              <span id="storageEmpty">-</span>
+            </dd>
+          </div>
         </dl>
       </form>
 
@@ -104,6 +110,14 @@
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <rect x="9" y="9" width="13" height="13" rx="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+
+          <button id="downloadButton" class="button button-icon-only" type="button" title="Tải file" aria-label="Tải file" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="M7 10l5 5 5-5"></path>
+              <path d="M5 21h14"></path>
             </svg>
           </button>
         </div>

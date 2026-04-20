@@ -303,6 +303,15 @@ input:focus {
   overflow-wrap: anywhere;
 }
 
+.meta-link {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.meta-link:hover {
+  text-decoration: underline;
+}
+
 .preview-panel {
   min-height: 620px;
   overflow: hidden;

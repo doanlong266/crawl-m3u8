@@ -4,6 +4,10 @@
     {
       "source": "/api/crawl",
       "destination": "/api"
+    },
+    {
+      "source": "/api/supabase/upload",
+      "destination": "/api"
     }
   ]
 }

@@ -9,18 +9,31 @@
   const buttonIcon = document.querySelector("#buttonIcon");
   const clearButton = document.querySelector("#clearButton");
   const copyButton = document.querySelector("#copyButton");
+  const downloadButton = document.querySelector("#downloadButton");
   const statusBox = document.querySelector("#status");
   const preview = document.querySelector("#preview");
   const fileName = document.querySelector("#fileName");
   const fileSize = document.querySelector("#fileSize");
   const createdAt = document.querySelector("#createdAt");
+  const storageLink = document.querySelector("#storageLink");
+  const storageEmpty = document.querySelector("#storageEmpty");
 
   let currentOutput = "";
+  let currentFileName = "";
+  let currentFormat = "json";
+  let currentSize = 0;
+  let isBusy = false;
 
   function getApiPath() {
     return window.location.protocol === "file:"
       ? "http://127.0.0.1:5000/api/crawl"
       : "/api/crawl";
+  }
+
+  function getStorageUploadPath() {
+    return window.location.protocol === "file:"
+      ? "http://127.0.0.1:5000/api/supabase/upload"
+      : "/api/supabase/upload";
   }
 
   function selectedFormat() {
@@ -74,13 +87,21 @@
     return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[index]}`;
   }
 
-  function setLoading(isLoading) {
-    exportButton.disabled = isLoading;
-    clearButton.disabled = isLoading;
-    sourceUrl.disabled = isLoading;
-    maxMatches.disabled = isLoading;
-    buttonSpinner.classList.toggle("hidden", !isLoading);
-    buttonIcon.classList.toggle("hidden", isLoading);
+  function updateOutputButtons() {
+    const hasOutput = Boolean(currentOutput && currentFileName);
+    copyButton.disabled = !currentOutput;
+    downloadButton.disabled = !hasOutput;
+  }
+
+  function setBusy(nextBusy, showSpinner = false) {
+    isBusy = nextBusy;
+    exportButton.disabled = nextBusy;
+    clearButton.disabled = nextBusy;
+    sourceUrl.disabled = nextBusy;
+    maxMatches.disabled = nextBusy;
+    buttonSpinner.classList.toggle("hidden", !showSpinner);
+    buttonIcon.classList.toggle("hidden", showSpinner);
+    updateOutputButtons();
   }
 
   function setStatus(message, isError = false) {
@@ -92,7 +113,20 @@
     currentOutput = text;
     preview.textContent = text || "Chưa có dữ liệu";
     preview.classList.toggle("empty", !text);
-    copyButton.disabled = !text;
+    updateOutputButtons();
+  }
+
+  function resetStorageLink() {
+    storageLink.href = "#";
+    storageLink.classList.add("hidden");
+    storageEmpty.classList.remove("hidden");
+  }
+
+  function setStorageLink(url) {
+    storageLink.href = url;
+    storageLink.textContent = "Mở link";
+    storageLink.classList.remove("hidden");
+    storageEmpty.classList.add("hidden");
   }
 
   function downloadFile(name, content, format) {
@@ -137,12 +171,55 @@
     textarea.remove();
   }
 
+  async function crawlOutput(urlValue, format, maxValue) {
+    const apiFormat = format === "txt" ? "m3u" : "json";
+    const params = new URLSearchParams({
+      format: apiFormat,
+      link: urlValue,
+      max: String(maxValue),
+    });
+
+    const response = await fetch(`${getApiPath()}?${params.toString()}`, {
+      headers: {
+        Accept: format === "json" ? "application/json" : "text/plain",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+
+    return format === "json"
+      ? JSON.stringify(await response.json(), null, 2)
+      : await response.text();
+  }
+
+  async function uploadOutput(filename, format, content) {
+    const response = await fetch(getStorageUploadPath(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        filename,
+        format,
+        content,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Không lấy được link");
+    }
+    return data;
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const urlValue = normalizeUrl(sourceUrl.value);
     const format = selectedFormat();
-    const apiFormat = format === "txt" ? "m3u" : "json";
     const maxValue = Math.max(1, Math.min(Number(maxMatches.value) || 80, 80));
 
     if (!urlValue) {
@@ -151,51 +228,52 @@
       return;
     }
 
-    const params = new URLSearchParams({
-      format: apiFormat,
-      link: urlValue,
-      max: String(maxValue),
-    });
-
-    setLoading(true);
-    setStatus("Đang crawl...");
+    currentFileName = "";
+    currentFormat = format;
+    currentSize = 0;
+    resetStorageLink();
     setPreview("");
+    setBusy(true, true);
 
     try {
-      const response = await fetch(`${getApiPath()}?${params.toString()}`, {
-        headers: {
-          Accept: format === "json" ? "application/json" : "text/plain",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-
-      const output = format === "json"
-        ? JSON.stringify(await response.json(), null, 2)
-        : await response.text();
       const name = buildFileName(urlValue, format);
-      const size = downloadFile(name, output, format);
 
+      setStatus("Đang crawl...");
+      const output = await crawlOutput(urlValue, format, maxValue);
+      const size = new Blob([output], {
+        type: format === "json" ? "application/json;charset=utf-8" : "text/plain;charset=utf-8",
+      }).size;
+
+      currentFileName = name;
+      currentFormat = format;
+      currentSize = size;
       setPreview(output);
       fileName.textContent = name;
       fileSize.textContent = formatBytes(size);
       createdAt.textContent = new Date().toLocaleString("vi-VN");
-      setStatus("Đã xuất file");
+
+      setStatus("Đang upload và lấy link...");
+      const uploaded = await uploadOutput(name, format, output);
+      const link = uploaded.direct_url || uploaded.shared_url;
+      setStorageLink(link);
+      await copyText(link);
+      setStatus("Đã lấy link và copy");
     } catch (error) {
-      setStatus(error.message || "Không thể crawl link này", true);
-      setPreview("");
+      setStatus(error.message || "Không lấy được link", true);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   });
 
   clearButton.addEventListener("click", () => {
     setPreview("");
+    currentFileName = "";
+    currentFormat = "json";
+    currentSize = 0;
     fileName.textContent = "-";
     fileSize.textContent = "-";
     createdAt.textContent = "-";
+    resetStorageLink();
     setStatus("Sẵn sàng");
     sourceUrl.focus();
   });
@@ -206,6 +284,17 @@
     }
 
     await copyText(currentOutput);
-    setStatus("Đã sao chép");
+    setStatus("Đã sao chép nội dung");
+  });
+
+  downloadButton.addEventListener("click", () => {
+    if (!currentOutput || !currentFileName) {
+      return;
+    }
+
+    const size = downloadFile(currentFileName, currentOutput, currentFormat);
+    currentSize = size;
+    fileSize.textContent = formatBytes(size);
+    setStatus("Đã tải file");
   });
 })();
