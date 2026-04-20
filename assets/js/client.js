@@ -154,21 +154,38 @@
     return response.text();
   }
 
-  async function copyText(text) {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-
+  function fallbackCopyText(text) {
     const textarea = document.createElement("textarea");
     textarea.value = text;
     textarea.setAttribute("readonly", "");
     textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
     textarea.style.opacity = "0";
     document.body.appendChild(textarea);
+    textarea.focus({ preventScroll: true });
     textarea.select();
-    document.execCommand("copy");
-    textarea.remove();
+
+    try {
+      return document.execCommand("copy");
+    } catch (error) {
+      return false;
+    } finally {
+      textarea.remove();
+    }
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard?.writeText && document.hasFocus()) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (error) {
+        return fallbackCopyText(text);
+      }
+    }
+
+    return fallbackCopyText(text);
   }
 
   async function crawlOutput(urlValue, format, maxValue) {
@@ -256,8 +273,8 @@
       const uploaded = await uploadOutput(name, format, output);
       const link = uploaded.direct_url || uploaded.shared_url;
       setStorageLink(link);
-      await copyText(link);
-      setStatus("Đã lấy link và copy");
+      const copied = await copyText(link);
+      setStatus(copied ? "Đã lấy link và sao chép" : "Đã lấy link. Mở link để sao chép thủ công");
     } catch (error) {
       setStatus(error.message || "Không lấy được link", true);
     } finally {
@@ -283,8 +300,8 @@
       return;
     }
 
-    await copyText(currentOutput);
-    setStatus("Đã sao chép nội dung");
+    const copied = await copyText(currentOutput);
+    setStatus(copied ? "Đã sao chép nội dung" : "Trình duyệt đang chặn sao chép tự động", !copied);
   });
 
   downloadButton.addEventListener("click", () => {
