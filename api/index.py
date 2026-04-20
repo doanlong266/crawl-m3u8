@@ -96,10 +96,10 @@ def options_response() -> Response:
 def supabase_url() -> str:
     raw = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
     if not raw:
-        raise RuntimeError("Thieu SUPABASE_URL.")
+        raise RuntimeError("Thiếu SUPABASE_URL.")
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise RuntimeError("SUPABASE_URL khong hop le.")
+        raise RuntimeError("SUPABASE_URL không hợp lệ.")
     return raw
 
 
@@ -112,14 +112,14 @@ def supabase_key() -> str:
         or ""
     ).strip()
     if not key:
-        raise RuntimeError("Thieu SUPABASE_SERVICE_ROLE_KEY hoac SUPABASE_ANON_KEY.")
+        raise RuntimeError("Thiếu SUPABASE_SERVICE_ROLE_KEY hoặc SUPABASE_ANON_KEY.")
     return key
 
 
 def supabase_bucket() -> str:
     bucket = (os.getenv("SUPABASE_STORAGE_BUCKET") or os.getenv("SUPABASE_BUCKET") or "crawl-m3u8").strip().strip("/")
     if not bucket:
-        raise RuntimeError("SUPABASE_STORAGE_BUCKET khong hop le.")
+        raise RuntimeError("SUPABASE_STORAGE_BUCKET không hợp lệ.")
     return bucket
 
 
@@ -190,20 +190,20 @@ def signed_storage_url(base_url: str, key: str, bucket: str, object_path: str) -
         timeout=20,
     )
     if response.status_code != 200:
-        raise RuntimeError(f"Khong tao duoc Supabase signed URL: {supabase_error(response)}")
+        raise RuntimeError(f"Không tạo được Supabase signed URL: {supabase_error(response)}")
 
     signed_path = response.json().get("signedURL", "")
     if not signed_path:
-        raise RuntimeError("Supabase khong tra signedURL.")
+        raise RuntimeError("Supabase không trả signedURL.")
     return f"{base_url}/storage/v1{signed_path}" if signed_path.startswith("/") else signed_path
 
 
 def upload_to_supabase(filename: str, content: str) -> dict:
     body = content.encode("utf-8")
     if not body:
-        raise ValueError("File rong, khong co noi dung de upload.")
+        raise ValueError("File rỗng, không có nội dung để upload.")
     if len(body) > MAX_STORAGE_UPLOAD_BYTES:
-        raise ValueError("File qua lon de upload qua endpoint nay.")
+        raise ValueError("File quá lớn để upload qua endpoint này.")
 
     base_url = supabase_url()
     key = supabase_key()
@@ -219,7 +219,7 @@ def upload_to_supabase(filename: str, content: str) -> dict:
         timeout=30,
     )
     if response.status_code not in {200, 201}:
-        raise RuntimeError(f"Khong upload duoc Supabase file: {supabase_error(response)}")
+        raise RuntimeError(f"Không upload được file Supabase: {supabase_error(response)}")
 
     metadata = response.json()
     shared_url = public_storage_url(base_url, bucket, object_path)
@@ -270,7 +270,7 @@ def supabase_upload_route():
 
     try:
         if not isinstance(content, str):
-            raise ValueError("Noi dung upload khong hop le.")
+            raise ValueError("Nội dung upload không hợp lệ.")
         result = upload_to_supabase(filename, content)
     except ValueError as e:
         return json_response({"ok": False, "error": str(e)}, status=400, cache=False)
