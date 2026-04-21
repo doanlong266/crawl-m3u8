@@ -363,7 +363,7 @@ def build_channel(
     default_image_url: str = DEFAULT_IMAGE_URL,
     source_url: str = "",
 ) -> dict:
-    ch_id = stable_id("benjamin", match_url, 12)
+    ch_id = stable_id("channel", match_url, 12)
     source_id = stable_id("src", ch_id, 10)
     content_id = stable_id("ct", ch_id, 10)
     stream_id = stable_id("st", ch_id, 10)
@@ -436,6 +436,63 @@ def build_groups(group_channels: dict[str, list[dict]]) -> list[dict]:
             "display": "horizontal",
             "grid_number": 2,
             "channels": []
+        }
+    ]
+
+def source_name_from_result(result: dict) -> str:
+    stats = result.get("stats") or {}
+    source_metadata = stats.get("source_metadata") or {}
+    json_data = result.get("json") or {}
+    return (
+        source_metadata.get("short_name")
+        or source_metadata.get("site_name")
+        or source_metadata.get("title")
+        or json_data.get("name")
+        or stats.get("source")
+        or "Source"
+    )
+
+def source_channels_from_result(result: dict) -> list[dict]:
+    channels = []
+    for group in (result.get("json") or {}).get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        for channel in group.get("channels", []):
+            channels.append(deepcopy(channel))
+    return channels
+
+def build_source_groups(results: list[dict]) -> list[dict]:
+    groups = []
+    used_ids = set()
+    for idx, result in enumerate(results, 1):
+        stats = result.get("stats") or {}
+        source_metadata = stats.get("source_metadata") or {}
+        source_name = source_name_from_result(result)
+        source_id = slugify(
+            source_metadata.get("output_base")
+            or source_metadata.get("id")
+            or source_name,
+            fallback=f"source-{idx}",
+            max_length=50,
+        )
+        if source_id in used_ids:
+            source_id = f"{source_id}-{idx}"
+        used_ids.add(source_id)
+
+        groups.append({
+            "id": source_id,
+            "name": source_name,
+            "display": "horizontal",
+            "grid_number": 2,
+            "channels": source_channels_from_result(result),
+        })
+    return groups or [
+        {
+            "id": "bongda",
+            "name": "Bóng Đá",
+            "display": "horizontal",
+            "grid_number": 2,
+            "channels": [],
         }
     ]
 
@@ -714,6 +771,7 @@ def build_buncha_json(
     group_channels: dict[str, list[dict]],
     source_url: str = START_URL,
     source_metadata: dict | None = None,
+    groups: list[dict] | None = None,
 ) -> dict:
     source_metadata = source_metadata or {}
     name = source_metadata.get("short_name") or source_metadata.get("site_name") or source_metadata.get("title") or urlparse(source_url).netloc or "Crawl"
@@ -728,7 +786,7 @@ def build_buncha_json(
         "image": {
             "url": image_url
         },
-        "groups": build_groups(group_channels),
+        "groups": groups if groups is not None else build_groups(group_channels),
         "option": {
             "save_history": False,
             "save_search_history": False,
@@ -737,7 +795,6 @@ def build_buncha_json(
     }
 
 def merge_crawled_json(results: list[dict]) -> dict:
-    group_channels = {"live": [], "upcoming": [], "finished": []}
     first_image = ""
 
     for result in results:
@@ -746,15 +803,8 @@ def merge_crawled_json(results: list[dict]) -> dict:
         if image_url and not first_image:
             first_image = image_url
 
-        for group in json_data.get("groups", []):
-            status = group.get("id") if isinstance(group, dict) else ""
-            if status not in group_channels:
-                continue
-            for channel in group.get("channels", []):
-                group_channels[status].append(deepcopy(channel))
-
     return build_buncha_json(
-        group_channels,
+        {"live": [], "upcoming": [], "finished": []},
         "bongda",
         {
             "id": "bongda",
@@ -766,19 +816,13 @@ def merge_crawled_json(results: list[dict]) -> dict:
             "source_url": "bongda",
             "output_base": "bongda",
         },
+        groups=build_source_groups(results),
     )
 
 def merge_crawled_m3u(results: list[dict]) -> str:
     lines = ["#EXTM3U"]
     for result in results:
-        source_metadata = (result.get("stats") or {}).get("source_metadata") or {}
-        source_name = (
-            source_metadata.get("short_name")
-            or source_metadata.get("site_name")
-            or source_metadata.get("title")
-            or (result.get("json") or {}).get("name")
-            or "Source"
-        )
+        source_name = source_name_from_result(result)
         body = m3u_body_lines(result.get("m3u", ""))
         if not body:
             continue
@@ -1231,7 +1275,7 @@ def build_result_from_api_matches(
         status = info["status"] if info["status"] in group_channels else "upcoming"
 
         group_channels[status].append(
-            build_channel(info, match_url, stream_urls, GROUP_NAME, source_name, source_image, source_url)
+            build_channel(info, match_url, stream_urls, source_name, source_name, source_image, source_url)
         )
 
         added_count = 0
@@ -1420,9 +1464,8 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
         m3u8s = unique_stream_urls(html)
         stream_urls = m3u8s if info["status"] == "live" else []
         status = info["status"] if info["status"] in group_channels else "upcoming"
-        source_group = GROUP_NAME
         group_channels[status].append(
-            build_channel(info, match_url, stream_urls, source_group, source_name, source_image, source_url)
+            build_channel(info, match_url, stream_urls, source_name, source_name, source_image, source_url)
         )
 
         added_count = 0
@@ -1436,7 +1479,7 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
                 m3u_items.append({
                     "name": (f'[{info["time"]}] {display_name}'.strip() if info.get("time") else display_name),
                     "url": u,
-                    "group": source_group,
+                    "group": GROUP_NAME,
                     "logo": source_image or info.get("team_a_image") or info.get("team_b_image"),
                     "headers": guess_request_headers(u, match_url, source_url),
                 })
