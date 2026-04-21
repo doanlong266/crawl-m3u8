@@ -23,6 +23,7 @@ VN_TZ = timezone(timedelta(hours=7))
 DEFAULT_MATCH_DURATION = timedelta(hours=2)
 DEFAULT_IMAGE_URL = ""
 BLOCKED_HOSTS = {"localhost", "localhost.localdomain"}
+BUGIO_MATCHES_API = "https://sv.bugiotv.xyz/internal/api/matches"
 
 STATUS_META = {
     "live": {
@@ -175,6 +176,11 @@ def absolute_url(value: str, source_url: str) -> str:
         return ""
     return urljoin(source_url, value)
 
+def decoded_response_text(response: requests.Response) -> str:
+    if not response.encoding or response.encoding.lower() in {"iso-8859-1", "latin-1"}:
+        response.encoding = "utf-8"
+    return response.text
+
 def slugify(value: str, fallback: str = "crawl", max_length: int = 70) -> str:
     text = clean_text(value)
     if not text:
@@ -246,6 +252,8 @@ def parse_vietnam_datetime(value: str) -> datetime | None:
         return None
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=VN_TZ)
         return dt.astimezone(VN_TZ)
     except (TypeError, ValueError):
         return None
@@ -705,16 +713,196 @@ def build_buncha_json(
         }
     }
 
+def is_bugio_source(source_url: str, home_html: str) -> bool:
+    host = (urlparse(source_url).hostname or "").lower()
+    return "bugio" in host or BUGIO_MATCHES_API in home_html
+
+def collect_m3u8_from_values(*values) -> list[str]:
+    out = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False)
+        else:
+            text = str(value)
+        for url in unique_stream_urls(text):
+            if url not in seen:
+                seen.add(url)
+                out.append(url)
+    return out
+
+def bugio_team(match: dict, side: str) -> tuple[str, str]:
+    club = match.get(f"{side}Club") if isinstance(match.get(f"{side}Club"), dict) else {}
+    name = club.get("name") or match.get(f"{side}ClubName") or ""
+    logo = club.get("logoUrl") or club.get("logo") or match.get(f"{side}ClubLogoUrl") or ""
+    return clean_text(name), clean_text(logo)
+
+def bugio_match_url(source_url: str, match: dict) -> str:
+    slug = clean_text(match.get("slug", "")) or slugify(match.get("title", ""), fallback="match")
+    match_id = match.get("id") or match.get("referenceId") or stable_id("match", slug, 8)
+    return urljoin(source_url.rstrip("/") + "/", f"truc-tiep/{slug}-I{match_id}")
+
+def bugio_stream_urls(match: dict) -> list[str]:
+    commentator = match.get("commentator") if isinstance(match.get("commentator"), dict) else {}
+    preferred = collect_m3u8_from_values(
+        commentator.get("streamSourceFhd"),
+        commentator.get("streamSourceHd"),
+        commentator.get("streamSourceSd"),
+    )
+    fallback = collect_m3u8_from_values(match)
+    seen = set()
+    out = []
+    for url in preferred + fallback:
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+def parse_bugio_match_info(match: dict) -> dict:
+    start_at_dt = parse_vietnam_datetime(match.get("startTime", "") or match.get("start_date_formatted", ""))
+    end_at_dt = start_at_dt + DEFAULT_MATCH_DURATION if start_at_dt else None
+    status = status_from_times(start_at_dt, end_at_dt)
+    team_a, team_a_image = bugio_team(match, "home")
+    team_b, team_b_image = bugio_team(match, "away")
+    title_like = clean_text(match.get("title", "")) or "Live"
+
+    if not team_a or not team_b:
+        fallback_a, fallback_b = split_teams_from_title(title_like)
+        team_a = team_a or fallback_a
+        team_b = team_b or fallback_b
+
+    return {
+        "time": start_at_dt.strftime("%H:%M") if start_at_dt else "",
+        "date": start_at_dt.strftime("%Y-%m-%d") if start_at_dt else "",
+        "start_at": format_datetime(start_at_dt),
+        "end_at": format_datetime(end_at_dt),
+        "status": status,
+        "status_text": status_text(status),
+        "league": clean_text(match.get("tournamentName", "") or match.get("league", "")),
+        "team_a": team_a.strip(),
+        "team_b": team_b.strip(),
+        "team_a_image": team_a_image.strip(),
+        "team_b_image": team_b_image.strip(),
+        "title_like": title_like,
+    }
+
+def crawl_bugio_api(
+    session: requests.Session,
+    source_url: str,
+    source_metadata: dict,
+    max_matches: int,
+    logger=None,
+) -> dict:
+    api_response = session.get(
+        BUGIO_MATCHES_API,
+        timeout=TIMEOUT,
+        headers={
+            "Accept": "application/json",
+            "Referer": source_url,
+            "Origin": f"{urlparse(source_url).scheme}://{urlparse(source_url).netloc}",
+        },
+    )
+    api_response.raise_for_status()
+    payload = api_response.json()
+    matches = payload.get("data", []) if isinstance(payload, dict) else payload
+    if not isinstance(matches, list):
+        matches = []
+    matches = matches[:max_matches]
+
+    source_name = source_metadata.get("site_name") or source_metadata.get("title") or urlparse(source_url).netloc
+    source_image = source_metadata.get("image", "")
+    m3u_items = []
+    group_channels = {"live": [], "upcoming": [], "finished": []}
+    seen_m3u8 = set()
+    match_stats = []
+
+    if logger:
+        logger(f"BuGio API: {BUGIO_MATCHES_API}")
+        logger(f"Tim thay so tran dau API: {len(matches)}")
+
+    for idx, match in enumerate(matches, 1):
+        if not isinstance(match, dict):
+            continue
+
+        match_url = bugio_match_url(source_url, match)
+        info = parse_bugio_match_info(match)
+        base_name = build_channel_name(info)
+        m3u8s = bugio_stream_urls(match)
+        stream_urls = m3u8s if info["status"] == "live" else []
+        status = info["status"] if info["status"] in group_channels else "upcoming"
+
+        group_channels[status].append(
+            build_channel(info, match_url, stream_urls, GROUP_NAME, source_name, source_image)
+        )
+
+        added_count = 0
+        if info["status"] == "live":
+            for link_idx, url in enumerate(stream_urls, 1):
+                if url in seen_m3u8:
+                    continue
+                seen_m3u8.add(url)
+                display_name = base_name if link_idx == 1 else f"{base_name} (Link {link_idx})"
+                m3u_items.append({
+                    "name": (f'[{info["time"]}] {display_name}'.strip() if info.get("time") else display_name),
+                    "url": url,
+                    "group": GROUP_NAME,
+                })
+                added_count += 1
+
+        match_stats.append({
+            "url": match_url,
+            "name": base_name,
+            "status": info["status"],
+            "status_text": info["status_text"],
+            "time": info.get("time", ""),
+            "m3u8_found": len(m3u8s),
+            "m3u_added": added_count,
+        })
+
+        if logger:
+            logger(
+                f"[{idx}/{len(matches)}] {match_url} | {info['status_text']} | "
+                f"Tim thay {len(m3u8s)} m3u8 | Da them M3U {added_count} link"
+            )
+
+    counts = {status: len(channels) for status, channels in group_channels.items()}
+    return {
+        "json": build_buncha_json(group_channels, source_url, source_metadata),
+        "m3u": build_m3u_text(m3u_items),
+        "stats": {
+            "source": source_url,
+            "source_metadata": source_metadata,
+            "adapter": "bugio-api",
+            "api_url": BUGIO_MATCHES_API,
+            "matches_found": len(matches),
+            "channels": sum(counts.values()),
+            "m3u_items": len(m3u_items),
+            "groups": counts,
+            "matches": match_stats,
+        }
+    }
+
 def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=None) -> dict:
     source_url = normalize_source_url(source_url)
     s = create_session()
     home = s.get(source_url, timeout=TIMEOUT)
     home.raise_for_status()
+    home_html = decoded_response_text(home)
 
-    source_metadata = extract_source_metadata(home.text, source_url)
+    source_metadata = extract_source_metadata(home_html, source_url)
     source_name = source_metadata.get("site_name") or source_metadata.get("title") or urlparse(source_url).netloc
     source_image = source_metadata.get("image", "")
-    match_links = extract_match_links(home.text, source_url)[:max_matches]
+
+    if is_bugio_source(source_url, home_html):
+        if logger:
+            logger(f"Nguon: {source_metadata.get('title', source_url)}")
+            logger(f"Logo/Image: {source_image}")
+            logger("Trang nay la SPA, chuyen sang crawl API BuGio")
+        return crawl_bugio_api(s, source_url, source_metadata, max_matches, logger)
+
+    match_links = extract_match_links(home_html, source_url)[:max_matches]
     if logger:
         logger(f"Nguồn: {source_metadata.get('title', source_url)}")
         logger(f"Logo/Image: {source_image}")
@@ -735,7 +923,7 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
                     "error": "Non-200 response"
                 })
                 continue
-            html = r.text
+            html = decoded_response_text(r)
         except Exception as e:
             match_stats.append({
                 "url": match_url,
