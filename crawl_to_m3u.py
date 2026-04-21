@@ -15,7 +15,6 @@ START_URL = "https://hoadaotv.info/"
 
 OUT_M3U = ""
 OUT_JSON = ""
-GROUP_NAME = "BenjaminDoan"
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 M3U_USER_AGENT = "Mozilla/5.0+(Windows+NT+11.0;+Win64;+x64)+AppleWebKit/537.36+(KHTML,+like+Gecko)+Chrome/113.0.0.0+Safari/537.36+Edg/113.0.1774.42"
 
@@ -1288,7 +1287,7 @@ def build_result_from_api_matches(
                 m3u_items.append({
                     "name": (f'[{info["time"]}] {display_name}'.strip() if info.get("time") else display_name),
                     "url": url,
-                    "group": GROUP_NAME,
+                    "group": base_name,
                     "logo": source_image or info.get("team_a_image") or info.get("team_b_image"),
                     "headers": guess_request_headers(url, match_url, source_url),
                 })
@@ -1479,7 +1478,7 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
                 m3u_items.append({
                     "name": (f'[{info["time"]}] {display_name}'.strip() if info.get("time") else display_name),
                     "url": u,
-                    "group": GROUP_NAME,
+                    "group": base_name,
                     "logo": source_image or info.get("team_a_image") or info.get("team_b_image"),
                     "headers": guess_request_headers(u, match_url, source_url),
                 })
