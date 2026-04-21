@@ -23,6 +23,7 @@ MAX_MATCHES = 80  # đủ dùng, mày tăng/giảm tùy
 VN_TZ = timezone(timedelta(hours=7))
 DEFAULT_MATCH_DURATION = timedelta(hours=2)
 DEFAULT_IMAGE_URL = ""
+JSON_DEFAULT_IMAGE_URL = "https://hailab.cloud/kodi/sport/default.png"
 BLOCKED_HOSTS = {"localhost", "localhost.localdomain"}
 
 STATUS_META = {
@@ -316,11 +317,16 @@ def team_payload(name: str, image_url: str, side: str, default_image_url: str = 
 
 def image_payload(url: str, default_image_url: str = DEFAULT_IMAGE_URL) -> dict:
     return {
-        "url": url or default_image_url,
-        "height": 480,
+        "url": url or default_image_url or JSON_DEFAULT_IMAGE_URL,
+        "type": "cover",
         "width": 640,
-        "display": "cover",
-        "shape": "square",
+        "height": 640,
+    }
+
+def stream_image_payload(url: str, default_image_url: str = DEFAULT_IMAGE_URL) -> dict:
+    return {
+        "url": url or default_image_url or JSON_DEFAULT_IMAGE_URL,
+        "type": "contain",
     }
 
 def description_from_info(info: dict) -> str:
@@ -347,21 +353,68 @@ def stream_link_type(url: str) -> str:
     return "hls"
 
 def stream_link_name(url: str, index: int) -> str:
-    stream_type = stream_link_type(url).upper()
-    return stream_type if index == 1 else f"{stream_type} {index}"
+    return f"Link {index}"
 
 def build_stream_links(stream_urls: list[str], channel_id: str, match_url: str, source_url: str = "") -> list[dict]:
     links = []
     for idx, url in enumerate(stream_urls, 1):
         links.append({
-            "id": stable_id("lnk", f"{channel_id}|{url}", 10),
+            "id": f"{channel_id}-s{idx}",
             "name": stream_link_name(url, idx),
+            "url": url,
             "type": stream_link_type(url),
             "default": idx == 1,
-            "url": url,
-            "request_headers": guess_request_headers(url, match_url, source_url)
+            "subtitles": None,
+            "remote_data": None,
+            "request_headers": None,
         })
     return links
+
+def json_status_label(info: dict) -> dict:
+    status = info.get("status", "live")
+    if status == "upcoming":
+        text = "Chưa diễn ra"
+        color = "#f59e0b"
+    elif status == "finished":
+        text = "Đã kết thúc"
+        color = "#6B7280"
+    else:
+        text = "Trực Tiếp"
+        color = "#f70525"
+    return {
+        "text": text,
+        "position": "top-left",
+        "color": color,
+        "text_color": "#ffffff",
+    }
+
+def vietnam_date_text(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(value)
+        return dt.strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return value
+
+def json_channel_name(info: dict) -> str:
+    base_name = build_channel_name(info)
+    league = clean_text(info.get("league", ""))
+    if league and league.lower() not in base_name.lower():
+        base_name = f"[{league}] {base_name}"
+
+    time_text = clean_text(info.get("time", ""))
+    date_text = vietnam_date_text(info.get("date", ""))
+    if time_text and date_text:
+        return f"{base_name} lúc {time_text} ngày {date_text}"
+    if time_text:
+        return f"{base_name} lúc {time_text}"
+    return base_name
+
+def channel_json_id(name: str, match_url: str) -> str:
+    slug = slugify(name, fallback="channel", max_length=86)
+    suffix = hashlib.md5(match_url.encode("utf-8", errors="ignore")).hexdigest()[:6]
+    return f"{slug}-{suffix}"
 
 def build_channel(
     info: dict,
@@ -372,54 +425,45 @@ def build_channel(
     default_image_url: str = DEFAULT_IMAGE_URL,
     source_url: str = "",
 ) -> dict:
-    ch_id = stable_id("channel", match_url, 12)
-    source_id = stable_id("src", ch_id, 10)
-    content_id = stable_id("ct", ch_id, 10)
-    stream_id = stable_id("st", ch_id, 10)
-    display_name = build_channel_name(info)
+    display_name = json_channel_name(info)
+    ch_id = channel_json_id(display_name, match_url)
+    source_id = f"{ch_id}-src1"
+    content_id = f"{ch_id}-c1"
+    stream_id = f"{ch_id}-ep1"
     stream_links = build_stream_links(stream_urls, ch_id, match_url, source_url)
+    image_url = info.get("team_a_image") or info.get("team_b_image") or default_image_url
 
     return {
         "id": ch_id,
         "name": display_name,
-        "labels": build_labels(info, group),
-        "description": description_from_info(info),
-        "image": image_payload(info.get("team_a_image") or info.get("team_b_image"), default_image_url),
-        "type": "single",
+        "description": display_name,
+        "label": json_status_label(info),
+        "image": image_payload(image_url, default_image_url),
+        "grid_number": 1,
         "display": "text-below",
-        "status": info.get("status", ""),
-        "status_text": info.get("status_text", ""),
-        "match_url": match_url,
-        "start_time": info.get("start_at", ""),
-        "end_time": info.get("end_at", ""),
-        "date": info.get("date", ""),
-        "time": info.get("time", ""),
-        "league": info.get("league", ""),
-        "team_a": info.get("team_a", ""),
-        "team_b": info.get("team_b", ""),
-        "team_a_image": info.get("team_a_image", ""),
-        "team_b_image": info.get("team_b_image", ""),
-        "teams": [
-            team_payload(info.get("team_a", ""), info.get("team_a_image", ""), "home", default_image_url),
-            team_payload(info.get("team_b", ""), info.get("team_b_image", ""), "away", default_image_url),
-        ],
+        "type": "single",
+        "enable_detail": True,
         "sources": [
             {
                 "id": source_id,
-                "name": source_name,
+                "name": "Source 1",
+                "image": None,
                 "contents": [
                     {
                         "id": content_id,
-                        "name": display_name,
+                        "name": "Content 1",
+                        "image": None,
                         "streams": [
                             {
                                 "id": stream_id,
-                                "name": group,
+                                "name": "Live",
+                                "image": stream_image_payload(image_url, default_image_url),
                                 "stream_links": stream_links
                             }
                         ]
                     }
-                ]
+                ],
+                "remote_data": None,
             }
         ]
     }
@@ -435,7 +479,9 @@ def build_groups(group_channels: dict[str, list[dict]]) -> list[dict]:
             "id": status,
             "name": meta["group"],
             "display": "horizontal",
-            "grid_number": 2,
+            "grid_number": 1,
+            "image": None,
+            "enable_detail": False,
             "channels": channels
         })
     return groups or [
@@ -443,7 +489,9 @@ def build_groups(group_channels: dict[str, list[dict]]) -> list[dict]:
             "id": "live",
             "name": STATUS_META["live"]["group"],
             "display": "horizontal",
-            "grid_number": 2,
+            "grid_number": 1,
+            "image": None,
+            "enable_detail": False,
             "channels": []
         }
     ]
@@ -470,39 +518,51 @@ def source_channels_from_result(result: dict) -> list[dict]:
             channels.append(deepcopy(channel))
     return channels
 
+def channels_from_group_channels(group_channels: dict[str, list[dict]]) -> list[dict]:
+    channels = []
+    for status in ["live", "upcoming", "finished"]:
+        channels.extend(group_channels.get(status, []))
+    return channels
+
+def source_group_payload(group_id: str, name: str, channels: list[dict]) -> dict:
+    return {
+        "id": group_id,
+        "name": name,
+        "display": "horizontal",
+        "grid_number": 1,
+        "image": None,
+        "enable_detail": False,
+        "channels": channels,
+    }
+
+def build_single_source_groups(
+    group_channels: dict[str, list[dict]],
+    source_name: str,
+    source_metadata: dict | None = None,
+) -> list[dict]:
+    source_metadata = source_metadata or {}
+    base_id = slugify(
+        source_metadata.get("output_base")
+        or source_metadata.get("id")
+        or source_name,
+        fallback="source",
+        max_length=50,
+    )
+    return [
+        source_group_payload(
+            f"{base_id}-group-1",
+            source_name,
+            channels_from_group_channels(group_channels),
+        )
+    ]
+
 def build_source_groups(results: list[dict]) -> list[dict]:
     groups = []
-    used_ids = set()
     for idx, result in enumerate(results, 1):
-        stats = result.get("stats") or {}
-        source_metadata = stats.get("source_metadata") or {}
         source_name = source_name_from_result(result)
-        source_id = slugify(
-            source_metadata.get("output_base")
-            or source_metadata.get("id")
-            or source_name,
-            fallback=f"source-{idx}",
-            max_length=50,
-        )
-        if source_id in used_ids:
-            source_id = f"{source_id}-{idx}"
-        used_ids.add(source_id)
-
-        groups.append({
-            "id": source_id,
-            "name": source_name,
-            "display": "horizontal",
-            "grid_number": 2,
-            "channels": source_channels_from_result(result),
-        })
+        groups.append(source_group_payload(f"bongda-group-{idx}", source_name, source_channels_from_result(result)))
     return groups or [
-        {
-            "id": "bongda",
-            "name": "Bóng Đá",
-            "display": "horizontal",
-            "grid_number": 2,
-            "channels": [],
-        }
+        source_group_payload("bongda", "Bóng Đá", [])
     ]
 
 def iter_json_ld_objects(data):
@@ -689,34 +749,6 @@ def build_channel_name(info: dict) -> str:
     if info["title_like"]:
         return info["title_like"]
     return "Live"
-
-def build_labels(info: dict, group: str) -> list[dict]:
-    status = info.get("status", "live")
-    meta = STATUS_META.get(status, STATUS_META["live"])
-    labels = [
-        {
-            "position": "top-left",
-            "text": meta["text"],
-            "color": meta["color"],
-            "text_color": "#FFFFFF"
-        },
-        {
-            "position": "bottom-left",
-            "text": group,
-            "color": "#0066CC",
-            "text_color": "#FFFFFF"
-        }
-    ]
-    if info.get("time"):
-        labels.append(
-            {
-                "position": "center",
-                "text": info["time"],
-                "color": "#4CAF50",
-                "text_color": "#FFFFFF"
-            }
-        )
-    return labels
 
 def guess_request_headers(m3u8_url: str, match_url: str, source_url: str = "") -> list[dict]:
     """
@@ -1322,7 +1354,12 @@ def build_result_from_api_matches(
 
     counts = {status: len(channels) for status, channels in group_channels.items()}
     return {
-        "json": build_buncha_json(group_channels, source_url, source_metadata),
+        "json": build_buncha_json(
+            group_channels,
+            source_url,
+            source_metadata,
+            groups=build_single_source_groups(group_channels, source_name, source_metadata),
+        ),
         "m3u": build_m3u_text(m3u_items),
         "stats": {
             "source": source_url,
@@ -1514,7 +1551,12 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
 
     counts = {status: len(channels) for status, channels in group_channels.items()}
     return {
-        "json": build_buncha_json(group_channels, source_url, source_metadata),
+        "json": build_buncha_json(
+            group_channels,
+            source_url,
+            source_metadata,
+            groups=build_single_source_groups(group_channels, source_name, source_metadata),
+        ),
         "m3u": build_m3u_text(m3u_items),
         "stats": {
             "source": source_url,
