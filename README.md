@@ -67,6 +67,26 @@ Public: true
 /api/crawl?format=stats&link=https%3A%2F%2Fhoadaotv.info%2F
 ```
 
+Merge nhiều nguồn thành `bongda.json` hoặc M3U/TXT gộp:
+
+```text
+/api/merge?links=https%3A%2F%2Fcumeo2.link%2F%20https%3A%2F%2Fsv2.thiendinh1.live%2Ftrang-chu
+/api/merge?format=m3u&link=https%3A%2F%2Fcumeo2.link%2F&link=https%3A%2F%2Fsv2.thiendinh1.live%2Ftrang-chu
+```
+
+POST JSON cũng được:
+
+```json
+{
+  "links": [
+    "https://cumeo2.link/",
+    "https://sv2.thiendinh1.live/trang-chu"
+  ],
+  "format": "json",
+  "max": 10
+}
+```
+
 Optional:
 
 ```text

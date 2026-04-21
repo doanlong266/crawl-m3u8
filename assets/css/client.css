@@ -32,7 +32,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -157,10 +158,10 @@ label,
 }
 
 input[type="url"],
-input[type="number"] {
+input[type="number"],
+textarea {
   width: 100%;
   min-height: 46px;
-  padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   outline: none;
@@ -169,7 +170,20 @@ input[type="number"] {
   transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
 
-input:focus {
+input[type="url"],
+input[type="number"] {
+  padding: 0 12px;
+}
+
+textarea {
+  min-height: 132px;
+  padding: 12px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+input:focus,
+textarea:focus {
   border-color: var(--accent);
   background: #ffffff;
   box-shadow: 0 0 0 4px rgba(20, 143, 115, 0.14);

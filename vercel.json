@@ -6,6 +6,10 @@
       "destination": "/api"
     },
     {
+      "source": "/api/merge",
+      "destination": "/api"
+    },
+    {
       "source": "/api/supabase/upload",
       "destination": "/api"
     }

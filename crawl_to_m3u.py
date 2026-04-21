@@ -3,6 +3,7 @@ import sys
 import json
 import hashlib
 import unicodedata
+from copy import deepcopy
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
@@ -696,6 +697,19 @@ def build_m3u_text(m3u_items: list[dict]) -> str:
         m3u_lines.append(it["url"])
     return "\n".join(m3u_lines) + "\n"
 
+def m3u_source_separator(source_name: str) -> str:
+    name = clean_text(source_name).upper() or "SOURCE"
+    return f"#------------------{name}-------------------------"
+
+def m3u_body_lines(m3u_text: str) -> list[str]:
+    lines = []
+    for line in (m3u_text or "").splitlines():
+        clean_line = line.strip()
+        if not clean_line or clean_line == "#EXTM3U":
+            continue
+        lines.append(line)
+    return lines
+
 def build_buncha_json(
     group_channels: dict[str, list[dict]],
     source_url: str = START_URL,
@@ -720,6 +734,131 @@ def build_buncha_json(
             "save_search_history": False,
             "save_wishlist": False
         }
+    }
+
+def merge_crawled_json(results: list[dict]) -> dict:
+    group_channels = {"live": [], "upcoming": [], "finished": []}
+    first_image = ""
+
+    for result in results:
+        json_data = result.get("json") or {}
+        image_url = ((json_data.get("image") or {}).get("url") or "").strip()
+        if image_url and not first_image:
+            first_image = image_url
+
+        for group in json_data.get("groups", []):
+            status = group.get("id") if isinstance(group, dict) else ""
+            if status not in group_channels:
+                continue
+            for channel in group.get("channels", []):
+                group_channels[status].append(deepcopy(channel))
+
+    return build_buncha_json(
+        group_channels,
+        "bongda",
+        {
+            "id": "bongda",
+            "title": "Bóng Đá",
+            "site_name": "Bóng Đá",
+            "short_name": "Bóng Đá",
+            "description": "Danh sách bóng đá gộp",
+            "image": first_image,
+            "source_url": "bongda",
+            "output_base": "bongda",
+        },
+    )
+
+def merge_crawled_m3u(results: list[dict]) -> str:
+    lines = ["#EXTM3U"]
+    for result in results:
+        source_metadata = (result.get("stats") or {}).get("source_metadata") or {}
+        source_name = (
+            source_metadata.get("short_name")
+            or source_metadata.get("site_name")
+            or source_metadata.get("title")
+            or (result.get("json") or {}).get("name")
+            or "Source"
+        )
+        body = m3u_body_lines(result.get("m3u", ""))
+        if not body:
+            continue
+        lines.append(m3u_source_separator(source_name))
+        lines.extend(body)
+    return "\n".join(lines) + "\n"
+
+def merge_crawls(source_urls: list[str], max_matches: int = MAX_MATCHES, logger=None) -> dict:
+    results = []
+    errors = []
+    seen = set()
+
+    for raw_url in source_urls:
+        raw_url = clean_text(raw_url)
+        if not raw_url:
+            continue
+        try:
+            source_url = normalize_source_url(raw_url)
+        except ValueError as e:
+            errors.append({"source": raw_url, "error": str(e)})
+            continue
+
+        key = source_url.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        try:
+            if logger:
+                logger(f"Crawl merge: {source_url}")
+            results.append(crawl(max_matches=max_matches, source_url=source_url, logger=logger))
+        except Exception as e:
+            errors.append({"source": source_url, "error": str(e)})
+
+    if not results:
+        raise ValueError("Không crawl được nguồn nào để gộp.")
+
+    counts = {"live": 0, "upcoming": 0, "finished": 0}
+    total_channels = 0
+    total_m3u_items = 0
+    sources = []
+
+    for result in results:
+        stats = result.get("stats") or {}
+        groups = stats.get("groups") or {}
+        for status in counts:
+            counts[status] += int(groups.get(status) or 0)
+        total_channels += int(stats.get("channels") or 0)
+        total_m3u_items += int(stats.get("m3u_items") or 0)
+        sources.append({
+            "source": stats.get("source", ""),
+            "source_metadata": stats.get("source_metadata") or {},
+            "adapter": stats.get("adapter"),
+            "api_url": stats.get("api_url"),
+            "matches_found": stats.get("matches_found", 0),
+            "channels": stats.get("channels", 0),
+            "m3u_items": stats.get("m3u_items", 0),
+            "groups": groups,
+        })
+
+    return {
+        "json": merge_crawled_json(results),
+        "m3u": merge_crawled_m3u(results),
+        "stats": {
+            "source": "bongda",
+            "source_metadata": {
+                "id": "bongda",
+                "title": "Bóng Đá",
+                "site_name": "Bóng Đá",
+                "short_name": "Bóng Đá",
+                "description": "Danh sách bóng đá gộp",
+                "output_base": "bongda",
+            },
+            "sources_found": len(results),
+            "channels": total_channels,
+            "m3u_items": total_m3u_items,
+            "groups": counts,
+            "sources": sources,
+            "errors": errors,
+        },
     }
 
 def collect_m3u8_from_values(*values) -> list[str]:

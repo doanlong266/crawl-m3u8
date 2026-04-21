@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from crawl_to_m3u import MAX_MATCHES, START_URL, crawl
+from crawl_to_m3u import MAX_MATCHES, START_URL, crawl, merge_crawls
 
 
 app = Flask(__name__)
@@ -53,6 +53,46 @@ def parse_max_matches() -> int:
 
 def parse_source_url() -> str:
     return request.args.get("link") or request.args.get("url") or START_URL
+
+
+def split_source_links(value) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = re.split(r"[\s,]+", value)
+    else:
+        raw_items = []
+
+    links = []
+    seen = set()
+    for item in raw_items:
+        link = str(item or "").strip()
+        if not link:
+            continue
+        key = link.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        links.append(link)
+    return links
+
+
+def parse_source_links() -> list[str]:
+    links = request.args.getlist("link") + request.args.getlist("url")
+    links.extend(split_source_links(request.args.get("links", "")))
+    links.extend(split_source_links(request.args.get("urls", "")))
+    return split_source_links(links)
+
+
+def parse_payload_max_matches(payload: dict) -> int:
+    raw = payload.get("max", "")
+    if not raw:
+        return MAX_MATCHES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return MAX_MATCHES
+    return max(1, min(value, MAX_MATCHES))
 
 
 def json_response(data, status: int = 200, cache: bool = True) -> Response:
@@ -257,6 +297,43 @@ def crawl_route():
         return json_response(result["stats"])
 
     return json_response(result["json"])
+
+
+@app.route("/api/merge", methods=["GET", "POST", "OPTIONS"])
+def merge_route():
+    if request.method == "OPTIONS":
+        return options_response()
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        output_format = str(payload.get("format", "json")).lower()
+        links = split_source_links(payload.get("links", []))
+        links.extend(split_source_links(payload.get("urls", [])))
+        if not links:
+            links = split_source_links(payload.get("link", ""))
+        max_matches = parse_payload_max_matches(payload)
+    else:
+        output_format = request.args.get("format", "json").lower()
+        links = parse_source_links()
+        max_matches = parse_max_matches()
+
+    if not links:
+        return json_response({"ok": False, "error": "Thiếu danh sách link để gộp."}, status=400, cache=False)
+
+    try:
+        result = merge_crawls(links, max_matches=max_matches)
+    except ValueError as e:
+        return json_response({"ok": False, "error": str(e)}, status=400, cache=False)
+    except Exception as e:
+        return json_response({"ok": False, "error": str(e)}, status=500, cache=False)
+
+    if output_format in {"m3u", "txt"}:
+        return text_response(result["m3u"], "audio/x-mpegurl; charset=utf-8", cache=False)
+
+    if output_format == "stats":
+        return json_response(result["stats"], cache=False)
+
+    return json_response(result["json"], cache=False)
 
 
 @app.route("/api/supabase/upload", methods=["POST", "OPTIONS"])

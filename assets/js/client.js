@@ -30,6 +30,12 @@
       : "/api/crawl";
   }
 
+  function getMergePath() {
+    return window.location.protocol === "file:"
+      ? "http://127.0.0.1:5000/api/merge"
+      : "/api/merge";
+  }
+
   function getStorageUploadPath() {
     return window.location.protocol === "file:"
       ? "http://127.0.0.1:5000/api/supabase/upload"
@@ -48,6 +54,24 @@
     return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   }
 
+  function parseSourceUrls(value) {
+    const urls = [];
+    const seen = new Set();
+    for (const item of value.split(/[\s,]+/)) {
+      const url = normalizeUrl(item);
+      if (!url) {
+        continue;
+      }
+      const key = url.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      urls.push(url);
+    }
+    return urls;
+  }
+
   function slugify(value) {
     return value
       .normalize("NFD")
@@ -58,7 +82,13 @@
       .slice(0, 60) || "crawl";
   }
 
-  function buildFileName(urlValue, format) {
+  function buildFileName(urlValues, format) {
+    const values = Array.isArray(urlValues) ? urlValues : [urlValues];
+    if (values.length > 1) {
+      return `bongda.${format === "txt" ? "txt" : "json"}`;
+    }
+
+    const urlValue = values[0] || "";
     let label = "crawl";
     try {
       const parsed = new URL(urlValue);
@@ -188,19 +218,37 @@
     return fallbackCopyText(text);
   }
 
-  async function crawlOutput(urlValue, format, maxValue) {
+  async function crawlOutput(urlValues, format, maxValue) {
     const apiFormat = format === "txt" ? "m3u" : "json";
-    const params = new URLSearchParams({
-      format: apiFormat,
-      link: urlValue,
-      max: String(maxValue),
-    });
+    const values = Array.isArray(urlValues) ? urlValues : [urlValues];
+    let response;
 
-    const response = await fetch(`${getApiPath()}?${params.toString()}`, {
-      headers: {
-        Accept: format === "json" ? "application/json" : "text/plain",
-      },
-    });
+    if (values.length > 1) {
+      response = await fetch(getMergePath(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: format === "json" ? "application/json" : "text/plain",
+        },
+        body: JSON.stringify({
+          links: values,
+          format: apiFormat,
+          max: maxValue,
+        }),
+      });
+    } else {
+      const params = new URLSearchParams({
+        format: apiFormat,
+        link: values[0],
+        max: String(maxValue),
+      });
+
+      response = await fetch(`${getApiPath()}?${params.toString()}`, {
+        headers: {
+          Accept: format === "json" ? "application/json" : "text/plain",
+        },
+      });
+    }
 
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -235,11 +283,11 @@
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const urlValue = normalizeUrl(sourceUrl.value);
+    const urlValues = parseSourceUrls(sourceUrl.value);
     const format = selectedFormat();
     const maxValue = Math.max(1, Math.min(Number(maxMatches.value) || 80, 80));
 
-    if (!urlValue) {
+    if (!urlValues.length) {
       setStatus("Nhập link nguồn", true);
       sourceUrl.focus();
       return;
@@ -253,10 +301,14 @@
     setBusy(true, true);
 
     try {
-      const name = buildFileName(urlValue, format);
+      const name = buildFileName(urlValues, format);
+      const isMerge = urlValues.length > 1;
 
       setStatus("Đang crawl...");
-      const output = await crawlOutput(urlValue, format, maxValue);
+      if (isMerge) {
+        setStatus("\u0110ang g\u1ed9p danh s\u00e1ch...");
+      }
+      const output = await crawlOutput(urlValues, format, maxValue);
       const size = new Blob([output], {
         type: format === "json" ? "application/json;charset=utf-8" : "text/plain;charset=utf-8",
       }).size;
