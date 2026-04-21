@@ -46,8 +46,8 @@ STATUS_META = {
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-# Bắt m3u8 (absolute URL) trong HTML/inline JS
-M3U8_RE = re.compile(r'https?://[^\s"\'<>]+?\.m3u8(?:\?[^\s"\'<>]+)?', re.IGNORECASE)
+# Bắt stream URL tuyệt đối trong HTML/inline JS.
+STREAM_URL_RE = re.compile(r'https?:[/\\]{2}[^\s"\'<>]+?\.(?:m3u8|flv)(?:\?[^\s"\'<>]+)?', re.IGNORECASE)
 
 # Bắt giờ kiểu 09:30, 11:00
 TIME_RE = re.compile(r"\b(\d{1,2}:\d{2})\b")
@@ -333,20 +333,30 @@ def description_from_info(info: dict) -> str:
 def unique_stream_urls(html: str) -> list[str]:
     out = []
     seen = set()
-    for url in M3U8_RE.findall(html):
-        clean_url = unescape(url).replace("\\/", "/")
+    for url in STREAM_URL_RE.findall(html):
+        clean_url = unescape(url).replace("\\/", "/").replace("\\", "/")
         if clean_url not in seen:
             seen.add(clean_url)
             out.append(clean_url)
     return out
+
+def stream_link_type(url: str) -> str:
+    path = urlparse(url).path.lower()
+    if path.endswith(".flv"):
+        return "flv"
+    return "hls"
+
+def stream_link_name(url: str, index: int) -> str:
+    stream_type = stream_link_type(url).upper()
+    return stream_type if index == 1 else f"{stream_type} {index}"
 
 def build_stream_links(stream_urls: list[str], channel_id: str, match_url: str, source_url: str = "") -> list[dict]:
     links = []
     for idx, url in enumerate(stream_urls, 1):
         links.append({
             "id": stable_id("lnk", f"{channel_id}|{url}", 10),
-            "name": "HLS" if idx == 1 else f"HLS {idx}",
-            "type": "hls",
+            "name": stream_link_name(url, idx),
+            "type": stream_link_type(url),
             "default": idx == 1,
             "url": url,
             "request_headers": guess_request_headers(url, match_url, source_url)
@@ -904,7 +914,7 @@ def merge_crawls(source_urls: list[str], max_matches: int = MAX_MATCHES, logger=
         },
     }
 
-def collect_m3u8_from_values(*values) -> list[str]:
+def collect_stream_urls_from_values(*values) -> list[str]:
     out = []
     seen = set()
     for value in values:
@@ -1239,7 +1249,7 @@ def api_match_url(source_url: str, match: dict, info: dict) -> str:
     return urljoin(root, f"truc-tiep/{slug}")
 
 def api_stream_urls(match: dict) -> list[str]:
-    return collect_m3u8_from_values(match)
+    return collect_stream_urls_from_values(match)
 
 def build_result_from_api_matches(
     matches: list[dict],
@@ -1254,7 +1264,7 @@ def build_result_from_api_matches(
     source_image = source_metadata.get("image", "")
     m3u_items = []
     group_channels = {"live": [], "upcoming": [], "finished": []}
-    seen_m3u8 = set()
+    seen_streams = set()
     match_stats = []
     matches = [item for item in matches if isinstance(item, dict)]
     matches.sort(key=lambda item: api_start_time(item, naive_tz) or datetime.max.replace(tzinfo=VN_TZ))
@@ -1269,8 +1279,8 @@ def build_result_from_api_matches(
         info = parse_api_match_info(match, naive_tz)
         match_url = api_match_url(source_url, match, info)
         base_name = build_channel_name(info)
-        m3u8s = api_stream_urls(match)
-        stream_urls = m3u8s if info["status"] == "live" else []
+        streams = api_stream_urls(match)
+        stream_urls = streams if info["status"] == "live" else []
         status = info["status"] if info["status"] in group_channels else "upcoming"
 
         group_channels[status].append(
@@ -1280,9 +1290,9 @@ def build_result_from_api_matches(
         added_count = 0
         if info["status"] == "live":
             for link_idx, url in enumerate(stream_urls, 1):
-                if url in seen_m3u8:
+                if url in seen_streams:
                     continue
-                seen_m3u8.add(url)
+                seen_streams.add(url)
                 display_name = base_name if link_idx == 1 else f"{base_name} (Link {link_idx})"
                 m3u_items.append({
                     "name": (f'[{info["time"]}] {display_name}'.strip() if info.get("time") else display_name),
@@ -1299,14 +1309,15 @@ def build_result_from_api_matches(
             "status": info["status"],
             "status_text": info["status_text"],
             "time": info.get("time", ""),
-            "m3u8_found": len(m3u8s),
+            "streams_found": len(streams),
+            "m3u8_found": len(streams),
             "m3u_added": added_count,
         })
 
         if logger:
             logger(
                 f"[{idx}/{len(matches)}] {match_url} | {info['status_text']} | "
-                f"Tim thay {len(m3u8s)} m3u8 | Da them M3U {added_count} link"
+                f"Tim thay {len(streams)} stream | Da them M3U {added_count} link"
             )
 
     counts = {status: len(channels) for status, channels in group_channels.items()}
@@ -1435,7 +1446,7 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
 
     m3u_items = []
     group_channels = {"live": [], "upcoming": [], "finished": []}
-    seen_m3u8 = set()
+    seen_streams = set()
     match_stats = []
 
     for idx, match_url in enumerate(match_links, 1):
@@ -1459,9 +1470,9 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
         info = parse_match_info(html)
         base_name = build_channel_name(info)
 
-        # lấy tất cả m3u8 duy nhất theo thứ tự
-        m3u8s = unique_stream_urls(html)
-        stream_urls = m3u8s if info["status"] == "live" else []
+        # Lấy tất cả stream duy nhất theo thứ tự.
+        streams = unique_stream_urls(html)
+        stream_urls = streams if info["status"] == "live" else []
         status = info["status"] if info["status"] in group_channels else "upcoming"
         group_channels[status].append(
             build_channel(info, match_url, stream_urls, source_name, source_name, source_image, source_url)
@@ -1470,9 +1481,9 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
         added_count = 0
         if info["status"] == "live":
             for link_idx, u in enumerate(stream_urls, 1):
-                if u in seen_m3u8:
+                if u in seen_streams:
                     continue
-                seen_m3u8.add(u)
+                seen_streams.add(u)
 
                 display_name = base_name if link_idx == 1 else f"{base_name} (Link {link_idx})"
                 m3u_items.append({
@@ -1490,14 +1501,15 @@ def crawl(max_matches: int = MAX_MATCHES, source_url: str = START_URL, logger=No
             "status": info["status"],
             "status_text": info["status_text"],
             "time": info.get("time", ""),
-            "m3u8_found": len(m3u8s),
+            "streams_found": len(streams),
+            "m3u8_found": len(streams),
             "m3u_added": added_count
         })
 
         if logger:
             logger(
                 f"[{idx}/{len(match_links)}] {match_url} | {info['status_text']} | "
-                f"Tìm thấy {len(m3u8s)} m3u8 | Đã thêm M3U {added_count} link"
+                f"Tìm thấy {len(streams)} stream | Đã thêm M3U {added_count} link"
             )
 
     counts = {status: len(channels) for status, channels in group_channels.items()}
